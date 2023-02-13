@@ -1,10 +1,16 @@
+from threading import Thread
+from time import sleep
+from typing import List, Tuple, Callable, Any
+from collections import namedtuple
+
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
+
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String, Empty
-from typing import List, Tuple, Callable, Any
-from collections import namedtuple
 
 CameraArm = namedtuple('CameraManipulator', ('cp', 'js', 'servo_jp'))
 InstrumentArm = namedtuple(
@@ -12,8 +18,7 @@ InstrumentArm = namedtuple(
     ('T_b_w', 'jaw_servo_jp', 'cp', 'cv', 'js', 'servo_cp', 'servo_jp', 'servo_jv'),
 )
 
-# TODO analyze case of ROS1 subscribers to ROS2 publishers - does it work without hacks?
-# TODO write methods for publishing servos states
+# TODO analyze case of briging ROS1 subscribers to ROS2 publishers - does it work without hacks?
 
 
 class SRCDirector(Node):
@@ -21,6 +26,7 @@ class SRCDirector(Node):
         super().__init__('src_director')
 
         self._topics_data = {}
+        self._cb_group = ReentrantCallbackGroup()
 
         self._register_task3_setup_topics()
         self._register_manipulators()
@@ -32,7 +38,8 @@ class SRCDirector(Node):
             PoseStamped,
             '/CRTK/Needle/measured_cp',
             self._create_data_update_cb('needle_cp'),
-            10,
+            qos_profile=10,
+            callback_group=self._cb_group,
         )
 
         self.get_logger().info('Node initalized.')
@@ -43,7 +50,11 @@ class SRCDirector(Node):
             Empty, '/CRTK/scene/task_3_setup/init', 10
         )
         self._task3_setup_ready_sub = self.create_subscription(
-            Empty, '/CRTK/scene/task_3_setup/ready', self._task3_setup_ready_cb, 10
+            Empty,
+            '/CRTK/scene/task_3_setup/ready',
+            self._task3_setup_ready_cb,
+            qos_profile=10,
+            callback_group=self._cb_group,
         )
 
     def _register_manipulators(self) -> None:
@@ -67,13 +78,15 @@ class SRCDirector(Node):
             PoseStamped,
             '/CRTK/ecm/measured_cp',
             self._create_data_update_cb('ecm_cp'),
-            10,
+            qos_profile=10,
+            callback_group=self._cb_group,
         )
         js = self.create_subscription(
             JointState,
             '/CRTK/ecm/measured_js',
             self._create_data_update_cb('ecm_js'),
-            10,
+            qos_profile=10,
+            callback_group=self._cb_group,
         )
         servo_jp = self.create_publisher(JointState, '/CRTK/ecm/servo_jp', 10)
         return CameraArm(cp, js, servo_jp)
@@ -83,7 +96,8 @@ class SRCDirector(Node):
             PoseStamped,
             f'/CRTK/{psm_name}/T_b_w',
             self._create_data_update_cb(f'{psm_name}_T_b_w'),
-            10,
+            qos_profile=10,
+            callback_group=self._cb_group,
         )
         jaw_servo_jp = self.create_publisher(
             JointState, f'/CRTK/{psm_name}/jaw/servo_jp', 10
@@ -92,19 +106,22 @@ class SRCDirector(Node):
             PoseStamped,
             f'/CRTK/{psm_name}/measured_cp',
             self._create_data_update_cb(f'{psm_name}_cp'),
-            10,
+            qos_profile=10,
+            callback_group=self._cb_group,
         )
         cv = self.create_subscription(
             TwistStamped,
             f'/CRTK/{psm_name}/measured_cv',
             self._create_data_update_cb(f'{psm_name}_cv'),
-            10,
+            qos_profile=10,
+            callback_group=self._cb_group,
         )
         js = self.create_subscription(
             JointState,
             f'/CRTK/{psm_name}/measured_js',
             self._create_data_update_cb(f'{psm_name}_js'),
-            10,
+            qos_profile=10,
+            callback_group=self._cb_group,
         )
         servo_cp = self.create_publisher(PoseStamped, f'/CRTK/{psm_name}/servo_cp', 10)
         servo_jp = self.create_publisher(JointState, f'/CRTK/{psm_name}/servo_jp', 10)
@@ -127,11 +144,13 @@ class SRCDirector(Node):
                 f'/CRTK/Entry{idx+1}/measured_cp',
                 PoseStamped,
                 self._create_data_update_cb(entry_marker_key),
+                self._cb_group,
             )
             exit_markers[idx] = (
                 f'/CRTK/Exit{idx+1}/measured_cp',
                 PoseStamped,
                 self._create_data_update_cb(exit_marker_key),
+                self._cb_group,
             )
 
         self._entry_markers_poses_subs = self._create_subscribers_from_list(
@@ -141,8 +160,16 @@ class SRCDirector(Node):
 
     def _create_subscribers_from_list(self, subscriber_data_list: List[Tuple]) -> Tuple:
         subs = [None] * len(subscriber_data_list)
-        for idx, (topic, msg_type, callback) in enumerate(subscriber_data_list):
-            subs[idx] = self.create_subscription(msg_type, topic, callback, 10)
+        for idx, (topic, msg_type, callback, cb_group) in enumerate(
+            subscriber_data_list
+        ):
+            subs[idx] = self.create_subscription(
+                msg_type,
+                topic,
+                callback,
+                qos_profile=10,
+                callback_group=cb_group,
+            )
         return tuple(subs)
 
     def _task3_setup_ready_cb(self, msg: Empty) -> None:
@@ -156,10 +183,41 @@ class SRCDirector(Node):
 
     def setup_task3(self) -> None:
         self.get_logger().info('Preparing setup for Task 3.')
+        self._task3_setup_ready = False
         self._task3_setup_init_pub.publish(Empty())
-        while not self._task3_setup_ready:
-            sleep(0.1)
+        while self._task3_setup_ready == False:
+            rclpy.spin_once(self)
         self.get_logger().info('Task 3 setup is prepared.')
+
+    def set_camera_arm_joint_state(self, js: JointState) -> None:
+        self._ecm_topics.servo_jp.publish(js)
+        self.get_logger().info('Published new joint state for camera arm (ESM).')
+
+    def set_psm1_arm_states(
+        self,
+        jaw_jp: JointState = JointState(),
+        cp: PoseStamped = PoseStamped(),
+        js: JointState = JointState(),
+        jv: JointState = JointState(),
+    ) -> None:
+        self._psm1_topics.jaw_servo_jp.publish(jaw_jp)
+        self._psm1_topics.servo_cp.publish(cp)
+        self._psm1_topics.servo_jp.publish(js)
+        self._psm1_topics.servo_jv.publish(jv)
+        self.get_logger().info('Published new state for instrument arm (PSM1).')
+
+    def set_psm2_arm_states(
+        self,
+        jaw_jp: JointState = JointState(),
+        cp: PoseStamped = PoseStamped(),
+        js: JointState = JointState(),
+        jv: JointState = JointState(),
+    ) -> None:
+        self._psm2_topics.jaw_servo_jp.publish(jaw_jp)
+        self._psm2_topics.servo_cp.publish(cp)
+        self._psm2_topics.servo_jp.publish(js)
+        self._psm2_topics.servo_jv.publish(jv)
+        self.get_logger().info('Published new state for instrument arm (PSM2).')
 
     def get_topic_data(self, arg: str) -> Any:
         return self.__getitem__[arg]
@@ -176,13 +234,31 @@ def main(args=None):
     rclpy.init(args=args)
 
     src_director = SRCDirector()
+    sleep(1)  # let's ensure that dynamic ROS1 briging have time to kick in
+
+    executor = MultiThreadedExecutor()
+    executor.add_node(src_director)
+
+    print('[surobchal_ros2] Creating new thread for spinning the node.')
+    executor_thread = Thread(target=executor.spin_once(), daemon=True)
+    executor_thread.start()
+    print('[surobchal_ros2] Thread started. Proceeding to the infinity loop.')
 
     try:
-        rclpy.spin(src_director)
+        while True:
+            src_director.setup_task3()
+            src_director.get_logger().info('Waiting about 10 secs to do it again.')
+            for _ in range(10000):
+                sleep(0.001)
     except KeyboardInterrupt:
         print('[surobchal_ros2] Interrupted')
 
-    rclpy.shutdown()
+    src_director.destroy_node()
+    try:
+        rclpy.shutdown()
+    except:
+        pass
+    executor_thread.join()
 
 
 if __name__ == '__main__':
