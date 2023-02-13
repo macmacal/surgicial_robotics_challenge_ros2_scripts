@@ -31,16 +31,7 @@ class SRCDirector(Node):
         self._register_task3_setup_topics()
         self._register_manipulators()
         self._register_markers_subs(num_of_markers=4)
-
-        self._topics_data['needle_cp'] = PoseStamped()
-        self._needle_pose = PoseStamped()
-        self._needle_pose_sub = self.create_subscription(
-            PoseStamped,
-            '/CRTK/Needle/measured_cp',
-            self._create_data_update_cb('needle_cp'),
-            qos_profile=10,
-            callback_group=self._cb_group,
-        )
+        self._register_needle_pose_sub()
 
         self.get_logger().info('Node initalized.')
 
@@ -171,6 +162,17 @@ class SRCDirector(Node):
                 callback_group=cb_group,
             )
         return tuple(subs)
+
+    def _register_needle_pose_sub(self) -> None:
+        self._topics_data['needle_cp'] = PoseStamped()
+        self._needle_pose = PoseStamped()
+        self._needle_pose_sub = self.create_subscription(
+            PoseStamped,
+            '/CRTK/Needle/measured_cp',
+            self._create_data_update_cb('needle_cp'),
+            qos_profile=10,
+            callback_group=self._cb_group,
+        )
 
     def _task3_setup_ready_cb(self, msg: Empty) -> None:
         self._task3_setup_ready = True
