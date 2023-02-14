@@ -2,6 +2,7 @@ from threading import Thread
 from time import sleep
 from typing import List, Tuple, Callable, Any
 from collections import namedtuple
+from copy import copy
 
 import rclpy
 from rclpy.node import Node
@@ -17,9 +18,6 @@ InstrumentArm = namedtuple(
     'InstrumentArm',
     ('T_b_w', 'jaw_servo_jp', 'cp', 'cv', 'js', 'servo_cp', 'servo_jp', 'servo_jv'),
 )
-
-# TODO analyze case of briging ROS1 subscribers to ROS2 publishers - does it work without hacks?
-
 
 class SRCDirector(Node):
     def __init__(self):
@@ -197,32 +195,50 @@ class SRCDirector(Node):
 
     def set_psm1_arm_states(
         self,
-        jaw_jp: JointState = JointState(),
-        cp: PoseStamped = PoseStamped(),
-        js: JointState = JointState(),
-        jv: JointState = JointState(),
+        jaw_jp: JointState = None,
+        cp: PoseStamped = None,
+        js: JointState = None,
+        jv: JointState = None,
     ) -> None:
-        self._psm1_topics.jaw_servo_jp.publish(jaw_jp)
+        if jaw_jp is None:
+            jaw_jp = self.get_topic_data('psm1_T_b_w')
+        if cp is None:
+            cp = self.get_topic_data('psm1_cp')
+        if js is None:
+            js = self.get_topic_data('psm1_js')
+        if jv is None:
+            jv = self.get_topic_data('psm1_cv')
+
+        # self._psm1_topics.jaw_servo_jp.publish(jaw_jp)
         self._psm1_topics.servo_cp.publish(cp)
-        self._psm1_topics.servo_jp.publish(js)
-        self._psm1_topics.servo_jv.publish(jv)
+        # self._psm1_topics.servo_jp.publish(js)
+        # self._psm1_topics.servo_jv.publish(jv)
         self.get_logger().info('Published new state for instrument arm (PSM1).')
 
     def set_psm2_arm_states(
         self,
-        jaw_jp: JointState = JointState(),
-        cp: PoseStamped = PoseStamped(),
-        js: JointState = JointState(),
-        jv: JointState = JointState(),
+        jaw_jp: JointState = None,
+        cp: PoseStamped = None,
+        js: JointState = None,
+        jv: JointState = None,
     ) -> None:
-        self._psm2_topics.jaw_servo_jp.publish(jaw_jp)
+        if jaw_jp is None:
+            jaw_jp = self.get_topic_data('psm2_T_b_w')
+        if cp is None:
+            cp = self.get_topic_data('psm2_cp')
+        if js is None:
+            js = self.get_topic_data('psm2_js')
+        if jv is None:
+            jv = self.get_topic_data('psm2_cv')
+    
+        # self._psm2_topics.jaw_servo_jp.publish(jaw_jp)
         self._psm2_topics.servo_cp.publish(cp)
-        self._psm2_topics.servo_jp.publish(js)
-        self._psm2_topics.servo_jv.publish(jv)
+        # self._psm2_topics.servo_jp.publish(js)
+        # self._psm2_topics.servo_jv.publish(jv)
         self.get_logger().info('Published new state for instrument arm (PSM2).')
 
     def get_topic_data(self, arg: str) -> Any:
-        return self.__getitem__[arg]
+        return self.__getitem__(arg)
 
     def __getitem__(self, arg: str) -> Any:
         return self._topics_data[arg]
@@ -249,6 +265,15 @@ def main(args=None):
     try:
         while True:
             src_director.setup_task3()
+            
+            # TODO debug why this dosen't work 
+            src_director.get_logger().info('Moving towards Entry Point')
+            target_point = src_director['psm1_cp']
+            entry_point = src_director['marker_entry1_cp']
+
+            target_point.pose = copy(entry_point.pose)
+            target_point.pose.position.z += 0.01 # meters
+            src_director.set_psm1_arm_states(cp=target_point)
             src_director.get_logger().info('Waiting about 10 secs to do it again.')
             for _ in range(10000):
                 sleep(0.001)
