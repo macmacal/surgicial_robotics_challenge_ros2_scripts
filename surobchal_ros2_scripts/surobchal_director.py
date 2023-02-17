@@ -280,7 +280,8 @@ class SRCDirector(Node):
 
     def _parse_camera_state_to_pose_stamped(self, msg: CameraState) -> PoseStamped:
         result = PoseStamped()
-        simulation_unit_to_meters_coeff = 1
+        # TODO verify why this magic number makes more sense!
+        simulation_unit_to_meters_coeff = 10
         result.header = msg.header
         result.pose.position.x = msg.pose.position.x / simulation_unit_to_meters_coeff
         result.pose.position.y = msg.pose.position.y / simulation_unit_to_meters_coeff
